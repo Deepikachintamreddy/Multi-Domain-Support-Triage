@@ -38,7 +38,7 @@ log = logging.getLogger("agent")
 
 
 # Minimum content tokens to treat a ticket as meaningful
-_MIN_CONTENT_TOKENS = 4
+_MIN_CONTENT_TOKENS = 5
 
 
 class SupportTriageAgent:
@@ -101,6 +101,18 @@ class SupportTriageAgent:
             top_k_bm25=self.cfg.top_k_bm25,
             top_k_dense=self.cfg.top_k_dense,
         )
+        
+        # Sub-product hallucination penalty (Issue #3)
+        # If the chunk's source path implies a specific sub-product (like Chrome or iOS)
+        # but the user didn't mention it, penalize the score so we don't hallucinate context.
+        for rc in chunks:
+            path_low = rc.chunk.source_path.lower()
+            text_low = text.lower()
+            for sub_product in ["chrome", "ios", "android", "mac", "windows", "slack", "jira"]:
+                if sub_product in path_low and sub_product not in text_low:
+                    rc.final_score *= 0.7
+        chunks.sort(key=lambda x: x.final_score, reverse=True)
+        
         evidence_score = chunks[0].final_score if chunks else 0.0
 
         # Derive product_area from the top retrieved chunk's subdirectory
@@ -256,7 +268,8 @@ class SupportTriageAgent:
         """Returns (status, reason)."""
         # 1. High-risk must NEVER be short-circuited
         if risk.level == "high":
-            return "escalated", f"high-risk keyword '{risk.triggered_terms[0]}' matched (config.py:high_risk_keywords)"
+            if requires_account_action(ticket_text) or evidence_score < self.cfg.min_evidence_similarity:
+                return "escalated", f"high-risk + action/weak-evidence: {risk.triggered_terms[0]}"
         if contains_pii:
             return "escalated", "PII detected in ticket (card number / CVV) — human handling required"
         if contains_secret:

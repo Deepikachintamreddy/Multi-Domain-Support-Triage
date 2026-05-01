@@ -265,13 +265,17 @@ class HybridRetriever:
             )
         results.sort(key=lambda r: r.final_score, reverse=True)
 
+        import math
+
         # Cross-encoder reranking: take top-20 from fusion, rerank, keep top-k.
         if self._reranker is not None and len(results) > top_k:
             rerank_pool = results[:20]
             pairs = [(query, rc.chunk.text[:512]) for rc in rerank_pool]
             ce_scores = self._reranker.predict(pairs)
             for rc, ce_s in zip(rerank_pool, ce_scores):
-                rc.final_score = float(ce_s)  # replace fusion score with CE score
+                # Normalize unbounded CE scores to [0,1] using sigmoid so they
+                # work with the min_evidence_similarity cosine thresholds.
+                rc.final_score = 1 / (1 + math.exp(-float(ce_s)))
             rerank_pool.sort(key=lambda r: r.final_score, reverse=True)
             return rerank_pool[:top_k]
 

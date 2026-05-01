@@ -120,23 +120,24 @@ def generate_response(
 
 def fallback_extractive_answer(issue: str, chunks: List[RetrievedChunk]) -> str:
     """When no LLM is available, stitch together the top-1 chunk into a short reply."""
-    if not chunks:
-        return (
-            "Thanks for reaching out. We couldn't find relevant documentation "
-            "for your query. Please provide more details or contact our support "
-            "team directly for assistance."
-        )
-    top = chunks[0].chunk
-    text = top.text
-    # Strip ATX headers and italicized timestamps (Issue #4)
-    text = re.sub(r"^#+\s+.*$\n?", "", text, flags=re.MULTILINE)
-    text = re.sub(r"_Last updated:.*_", "", text, flags=re.IGNORECASE)
-    
-    excerpt = text[:500].rsplit(".", 1)[0] + "."
+    for rc in chunks:
+        text = rc.chunk.text
+        # Strip ATX headers and italicized timestamps (Issue #4)
+        text = re.sub(r"^#+\s+.*$\n?", "", text, flags=re.MULTILINE)
+        text = re.sub(r"_Last updated:.*_", "", text, flags=re.IGNORECASE)
+        
+        excerpt = text[:500].rsplit(".", 1)[0] + "."
+        if len(excerpt.strip()) >= 50:
+            return (
+                f"Based on our support documentation: {excerpt} "
+                f"(source: {rc.chunk.source_path}). If this doesn't resolve your issue, "
+                f"please reply with more details and we'll route it to the right team."
+            )
+            
     return (
-        f"Based on our support documentation: {excerpt} "
-        f"(source: {top.source_path}). If this doesn't resolve your issue, "
-        f"please reply with more details and we'll route it to the right team."
+        "Thanks for reaching out. We couldn't find relevant documentation "
+        "for your query. Please provide more details or contact our support "
+        "team directly for assistance."
     )
 
 
