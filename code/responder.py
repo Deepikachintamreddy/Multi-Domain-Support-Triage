@@ -118,13 +118,23 @@ def generate_response(
     return ""
 
 
+def _clean_markdown(text):
+    text = re.sub(r'^---\n.*?\n---\n', '', text, flags=re.DOTALL)  # frontmatter
+    text = re.sub(r'!\[.*?\]\(.*?\)', '', text)                    # images
+    text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)           # links → text
+    text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)                 # bold
+    text = re.sub(r'__([^_]+)__', r'\1', text)                     # bold
+    text = re.sub(r'`([^`]+)`', r'\1', text)                       # inline code
+    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)     # headers
+    text = re.sub(r'^[-*]\s+', '', text, flags=re.MULTILINE)       # bullets
+    text = re.sub(r'\\\s*$', '', text, flags=re.MULTILINE)         # trailing \\
+    text = re.sub(r'\s+', ' ', text)                               # collapse ws
+    return text.strip()
+
 def fallback_extractive_answer(issue: str, chunks: List[RetrievedChunk]) -> str:
     """When no LLM is available, stitch together the top-1 chunk into a short reply."""
     for rc in chunks:
-        text = rc.chunk.text
-        # Strip ATX headers and italicized timestamps (Issue #4)
-        text = re.sub(r"^#+\s+.*$\n?", "", text, flags=re.MULTILINE)
-        text = re.sub(r"_Last updated:.*_", "", text, flags=re.IGNORECASE)
+        text = _clean_markdown(rc.chunk.text)
         
         excerpt = text[:500].rsplit(".", 1)[0] + "."
         if len(excerpt.strip()) >= 50:

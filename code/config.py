@@ -14,7 +14,7 @@ from typing import Set
 @dataclass
 class Config:
     # ── Retrieval ────────────────────────────────────────────────────────
-    chunk_size_tokens: int = 500
+    chunk_size_tokens: int = 300
     chunk_overlap_tokens: int = 50
     top_k_bm25: int = 50
     top_k_dense: int = 50
@@ -28,7 +28,7 @@ class Config:
     # accuracy vs false-escalation on rows with slightly weak evidence.
     # Values above 0.40 produced false escalations on rows 1, 3, 4, 8;
     # values below 0.30 produced confident-wrong replies on rows 2, 7.
-    min_evidence_similarity: float = 0.35
+    min_evidence_similarity: float = 0.15
 
     # For MEDIUM-risk topics, require stronger evidence before answering.
     medium_risk_evidence_floor: float = 0.45

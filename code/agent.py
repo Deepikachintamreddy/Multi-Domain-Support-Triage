@@ -283,7 +283,10 @@ class SupportTriageAgent:
         if contains_secret:
             return "escalated", "user pasted a secret (key/password) — needs human handling"
         if requires_account_action(ticket_text):
-            return "escalated", "requires account-specific action by a human agent"
+            # If we have a very strong self-serve document (e.g. score > 0.5), reply with it
+            # instead of escalating. Otherwise, escalate as an account action.
+            if risk.level == "high" or evidence_score < 0.50:
+                return "escalated", "requires account-specific action by a human agent"
             
         # 2. Dangerous/Injection -> invalid + escalate
         if contains_dangerous:
