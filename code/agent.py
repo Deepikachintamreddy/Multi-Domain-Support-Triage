@@ -190,15 +190,36 @@ class SupportTriageAgent:
     ) -> str:
         """Derive product_area from the top chunk's corpus subdirectory.
 
-        The sample CSV uses subdirectory names (screen, community, privacy,
-        conversation_management, travel_support, general_support) — Item #15.
+        The sample CSV and instructions use specific labels: screen, community, 
+        interviews, privacy, conversation_management, travel_support, settings.
         """
         if not chunks:
             return "general_support"
-        top_path = chunks[0].chunk.source_path  # e.g. "hackerrank/screen/..."
-        parts = top_path.replace("\\", "/").split("/")
-        if len(parts) >= 2:
-            return parts[1]  # the subdirectory under the domain
+        
+        path = chunks[0].chunk.source_path.lower().replace("\\", "/")
+        
+        # Substring mapping to guarantee exact overlap with official vocabulary
+        mapping = {
+            "screen": "screen",
+            "interviews": "interviews",
+            "settings": "settings",
+            "hackerrank_community": "community",
+            "community": "community",
+            "privacy": "privacy",
+            "conversation": "conversation_management",
+            "travel": "travel_support",
+        }
+        
+        for key, val in mapping.items():
+            if f"/{key}" in path or path.startswith(f"{key}/") or key in path.split("/"):
+                return val
+                
+        # Additional safe fallbacks
+        if "integrations" in path:
+            return "integrations"
+        if "billing" in path or "plans" in path:
+            return "billing"
+            
         return "general_support"
 
     def _oos_or_tiny_response(self, domain: str | None, is_tiny: bool) -> str:
