@@ -3,12 +3,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import List
+from typing import List, Set
 
 
 # ── PII patterns ────────────────────────────────────────────────────────
-# Conservative — these will produce false positives on normal text;
-# we only use them as flags, not to block.
 _CARD_RE = re.compile(r"\b(?:\d[ -]?){13,19}\b")
 _CVV_NEAR_CARD_RE = re.compile(r"\bcvv\b\s*[:#]?\s*\d{3,4}", re.IGNORECASE)
 _PASSWORD_RE = re.compile(r"\bpassword\s*[:=]\s*\S+", re.IGNORECASE)
@@ -22,6 +20,7 @@ class SanitizedTicket:
     contains_pii: bool
     contains_secret: bool
     contains_injection: bool
+    contains_dangerous: bool
     sub_questions: List[str]
 
 
@@ -33,9 +32,15 @@ def _normalise_ws(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def detect_injection(text: str, signals: set[str]) -> bool:
+def detect_injection(text: str, signals: Set[str]) -> bool:
     low = text.lower()
     return any(sig in low for sig in signals)
+
+
+def detect_dangerous(text: str, patterns: Set[str]) -> bool:
+    """Detect dangerous/malicious instructions (Item #9)."""
+    low = text.lower()
+    return any(pat in low for pat in patterns)
 
 
 def detect_pii(text: str) -> bool:
@@ -72,7 +77,8 @@ def split_sub_questions(text: str) -> List[str]:
 def sanitize(
     issue: str,
     subject: str,
-    invalid_signals: set[str],
+    invalid_signals: Set[str],
+    dangerous_patterns: Set[str] | None = None,
 ) -> SanitizedTicket:
     raw = " ".join(filter(None, [subject, issue]))
     cleaned = _normalise_ws(_strip_html(raw))
@@ -82,5 +88,6 @@ def sanitize(
         contains_pii=detect_pii(cleaned),
         contains_secret=detect_secret(cleaned),
         contains_injection=detect_injection(cleaned, invalid_signals),
+        contains_dangerous=detect_dangerous(cleaned, dangerous_patterns or set()),
         sub_questions=split_sub_questions(cleaned),
     )

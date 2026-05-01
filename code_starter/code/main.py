@@ -71,6 +71,9 @@ def main() -> int:
     df = pd.read_csv(input_path)
     log.info("Loaded %d rows. Columns: %s", len(df), list(df.columns))
 
+    # Remember original column names so we can preserve them in output.
+    original_columns = list(df.columns)
+
     # Normalize column names to lowercase to handle CSV variations
     df.columns = [col.lower() for col in df.columns]
 
@@ -103,11 +106,10 @@ def main() -> int:
         out_rows.append(result)
 
     out_df = pd.DataFrame(out_rows, columns=OUTPUT_COLUMNS)
-    # Preserve any extra input columns the grader may include (e.g. ticket_id),
-    # then append the 5 required output columns in the documented order.
-    final_df = pd.concat([df.reset_index(drop=True), out_df], axis=1)
-    # Defensive: if pandas re-ordered anything, reassert the contract.
-    final_df = final_df[[c for c in df.columns] + OUTPUT_COLUMNS]
+    # Restore original column names for the input columns.
+    input_df = df.copy()
+    input_df.columns = original_columns
+    final_df = pd.concat([input_df.reset_index(drop=True), out_df], axis=1)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     final_df.to_csv(output_path, index=False, quoting=csv.QUOTE_ALL)
@@ -119,9 +121,11 @@ def main() -> int:
         ["product_issue", "feature_request", "bug", "invalid"]
     )
     if bad_status.any():
-        log.error("Invalid status values in %d rows!", int(bad_status.sum()))
+        log.error("Invalid status values in %d rows! Aborting.", int(bad_status.sum()))
+        return 3
     if bad_rt.any():
-        log.error("Invalid request_type values in %d rows!", int(bad_rt.sum()))
+        log.error("Invalid request_type values in %d rows! Aborting.", int(bad_rt.sum()))
+        return 3
     if final_df["response"].isna().any() or (final_df["response"] == "").any():
         log.warning("Some response cells are empty.")
 

@@ -19,15 +19,18 @@ log = logging.getLogger("classifier")
 _HACKERRANK_TERMS = {
     "hackerrank", "codepair", "assessment", "interview kit", "leaderboard",
     "skills certification", "test invite", "candidate", "recruiter",
+    "resume builder",
 }
 _CLAUDE_TERMS = {
     "claude", "anthropic", "claude.ai", "artifact", "projects",
-    "claude pro", "claude team", "claude enterprise",
+    "claude pro", "claude team", "claude enterprise", "bedrock",
+    "lti",
 }
 _VISA_TERMS = {
     "visa", "credit card", "debit card", "card declined", "atm",
     "merchant", "chargeback", "visa direct", "issuer", "bank",
     "transaction", "swipe", "tap to pay", "contactless",
+    "traveller", "carte",
 }
 
 
@@ -61,22 +64,37 @@ def infer_domain(text: str) -> Optional[str]:
 # ── Request type classification ─────────────────────────────────────────
 
 _BUG_HINTS = re.compile(
-    r"\b(error|crash(ed)?|broke(n)?|doesn'?t work|not working|500|404|stack ?trace|exception|fail(ed|ing)?)\b",
+    r"\b(error|crash(ed)?|broke(n)?|doesn'?t work|not working|500|404|"
+    r"stack ?trace|exception|fail(ed|ing)?|stopped working|is down|"
+    r"blocker|blocked|can\s*not\s*able)\b",
     re.IGNORECASE,
 )
 _FEATURE_HINTS = re.compile(
-    r"\b(can you add|please add|i wish|would be nice|feature request|support for|add support)\b",
+    r"\b(can you add|please add|i wish|would be nice|feature request|"
+    r"support for|add support|wanted to setup|want to set up|"
+    r"planning to start using|can you help us with)\b",
     re.IGNORECASE,
 )
 _HOWTO_HINTS = re.compile(
-    r"\b(how (do|can) i|how to|where (is|do)|why (is|does)|what is)\b",
+    r"\b(how (do|can) i|how to|where (is|do)|why (is|does)|what is|"
+    r"step.?by.?step|can you let me know)\b",
     re.IGNORECASE,
 )
 
 
-def classify_request_type(text: str, contains_injection: bool, evidence_score: float) -> str:
+def classify_request_type(
+    text: str,
+    contains_injection: bool,
+    contains_dangerous: bool,
+    evidence_score: float,
+    is_tiny: bool = False,
+) -> str:
     """Returns one of: product_issue, feature_request, bug, invalid."""
-    if contains_injection or not text or len(text.split()) < 3:
+    if contains_injection or contains_dangerous:
+        return "invalid"
+    if not text or len(text.split()) < 3:
+        return "invalid"
+    if is_tiny:
         return "invalid"
     if _BUG_HINTS.search(text):
         return "bug"
@@ -105,7 +123,6 @@ def _kw_match(text_low: str, keyword: str) -> bool:
     inside 'issue'.
     """
     if " " in keyword:
-        # Allow flexible whitespace between the words of a multi-word keyword.
         pattern = r"\b" + r"\s+".join(re.escape(w) for w in keyword.split()) + r"\b"
     else:
         pattern = r"\b" + re.escape(keyword) + r"\b"
@@ -138,7 +155,8 @@ def classify_risk(text: str, high_risk_keywords: set[str]) -> RiskAssessment:
 # ── Account-action detection ────────────────────────────────────────────
 # These are things the agent CAN'T do for the user — must escalate.
 _ACTION_VERBS = re.compile(
-    r"\b(reset|unlock|refund|cancel|reinstate|reactivate|merge|delete|close)\b",
+    r"\b(reset|unlock|refund|cancel|reinstate|reactivate|merge|delete|close|"
+    r"pause|restore|remove)\b",
     re.IGNORECASE,
 )
 _PERSONAL_REF = re.compile(r"\b(my|our|me|mine)\b", re.IGNORECASE)

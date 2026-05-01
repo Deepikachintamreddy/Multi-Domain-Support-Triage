@@ -17,6 +17,14 @@ from rank_bm25 import BM25Okapi
 
 log = logging.getLogger("retriever")
 
+# Lazy-import cross-encoder for reranking
+try:
+    from sentence_transformers import CrossEncoder as _CrossEncoder
+    _CE_AVAILABLE = True
+except Exception:
+    _CrossEncoder = None
+    _CE_AVAILABLE = False
+
 # Lazy-import sentence-transformers so the module loads even if it is missing
 # during dry-run / lint passes.
 try:
@@ -52,9 +60,17 @@ def _tokenize(text: str) -> List[str]:
     return [t.lower() for t in _TOKEN_RE.findall(text)]
 
 
+# Regex to strip YAML frontmatter (--- ... ---) from markdown files.
+_FRONTMATTER_RE = re.compile(r"\A---\n.*?\n---\n?", re.DOTALL)
+
+
 def _read_text_file(path: Path) -> Optional[str]:
     try:
-        return path.read_text(encoding="utf-8", errors="replace")
+        text = path.read_text(encoding="utf-8", errors="replace")
+        # Strip YAML frontmatter — it pollutes BM25 scoring AND leaks into
+        # user-facing responses via the extractive fallback.  Item #1.
+        text = _FRONTMATTER_RE.sub("", text, count=1)
+        return text
     except Exception as e:
         log.warning("Could not read %s: %s", path, e)
         return None
@@ -96,19 +112,25 @@ class HybridRetriever:
         chunk_size_tokens: int = 500,
         overlap_tokens: int = 50,
         embed_model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
+        use_reranker: bool = False,
+        rerank_model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2",
     ) -> None:
         self.corpus_root = corpus_root
         self.domains = list(domains)
         self.chunk_size = chunk_size_tokens
         self.overlap = overlap_tokens
         self.embed_model_name = embed_model_name
+        self.use_reranker = use_reranker
+        self.rerank_model_name = rerank_model_name
 
         self.chunks: List[Chunk] = []
         self._bm25_indexes: Dict[str, Tuple[BM25Okapi, List[int]]] = {}
         self._dense_vectors: Dict[str, Tuple[np.ndarray, List[int]]] = {}
         self._embed_model = None
+        self._reranker = None
 
         self._build()
+        self._init_reranker()
 
     # ─── Index build ────────────────────────────────────────────────────
     def _build(self) -> None:
@@ -176,6 +198,16 @@ class HybridRetriever:
                 "sentence-transformers not installed — falling back to BM25 only."
             )
 
+    def _init_reranker(self) -> None:
+        """Load cross-encoder reranker if enabled and available."""
+        if not self.use_reranker:
+            return
+        if not _CE_AVAILABLE:
+            log.warning("CrossEncoder not available — skipping reranker.")
+            return
+        log.info("Loading reranker model: %s", self.rerank_model_name)
+        self._reranker = _CrossEncoder(self.rerank_model_name)
+
     # ─── Query ──────────────────────────────────────────────────────────
     def retrieve(
         self,
@@ -232,6 +264,17 @@ class HybridRetriever:
                 )
             )
         results.sort(key=lambda r: r.final_score, reverse=True)
+
+        # Cross-encoder reranking: take top-20 from fusion, rerank, keep top-k.
+        if self._reranker is not None and len(results) > top_k:
+            rerank_pool = results[:20]
+            pairs = [(query, rc.chunk.text[:512]) for rc in rerank_pool]
+            ce_scores = self._reranker.predict(pairs)
+            for rc, ce_s in zip(rerank_pool, ce_scores):
+                rc.final_score = float(ce_s)  # replace fusion score with CE score
+            rerank_pool.sort(key=lambda r: r.final_score, reverse=True)
+            return rerank_pool[:top_k]
+
         return results[:top_k]
 
     def max_dense_similarity(self, query: str, domain: Optional[str] = None) -> float:

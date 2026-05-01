@@ -37,11 +37,8 @@ from safety import sanitize
 log = logging.getLogger("agent")
 
 
-_PRODUCT_AREA_BY_DOMAIN = {
-    "hackerrank": "HackerRank",
-    "claude": "Claude",
-    "visa": "Visa",
-}
+# Minimum content tokens to treat a ticket as meaningful
+_MIN_CONTENT_TOKENS = 4
 
 
 class SupportTriageAgent:
@@ -53,6 +50,8 @@ class SupportTriageAgent:
             chunk_size_tokens=config.chunk_size_tokens,
             overlap_tokens=config.chunk_overlap_tokens,
             embed_model_name=config.embed_model,
+            use_reranker=config.use_reranker,
+            rerank_model_name=config.rerank_model,
         )
 
     # ─── single-ticket entry point ──────────────────────────────────────
@@ -61,13 +60,17 @@ class SupportTriageAgent:
             issue=issue,
             subject=subject,
             invalid_signals=self.cfg.invalid_signals,
+            dangerous_patterns=self.cfg.dangerous_patterns,
         )
         text = ticket.cleaned_text
+
+        # 0. Empty / tiny ticket gate (Item #5) ----------------------------
+        content_tokens = [t for t in text.split() if len(t) > 1]
+        is_tiny = len(content_tokens) < _MIN_CONTENT_TOKENS
 
         # 1. Domain routing -------------------------------------------------
         normalized = normalize_company(company)
         domain = normalized or infer_domain(text)
-        product_area = self._product_area_for(domain, text)
 
         # 2. Retrieve evidence ---------------------------------------------
         # If the ticket has multiple sub-questions, retrieve per-sub-question
@@ -100,6 +103,10 @@ class SupportTriageAgent:
         )
         evidence_score = chunks[0].final_score if chunks else 0.0
 
+        # Derive product_area from the top retrieved chunk's subdirectory
+        # (Item #15 — matches sample CSV vocabulary like screen, community, etc.)
+        product_area = self._product_area_from_chunks(chunks, domain)
+
         # 3. Classify -------------------------------------------------------
         # Risk and injection are checked against the FULL text, not just
         # the primary sub-question, so a high-risk secondary question still
@@ -107,7 +114,9 @@ class SupportTriageAgent:
         request_type = classify_request_type(
             text,
             contains_injection=ticket.contains_injection,
+            contains_dangerous=ticket.contains_dangerous,
             evidence_score=evidence_score,
+            is_tiny=is_tiny,
         )
         risk = classify_risk(text, self.cfg.high_risk_keywords)
 
@@ -119,16 +128,24 @@ class SupportTriageAgent:
             evidence_score=evidence_score,
             contains_secret=ticket.contains_secret,
             contains_injection=ticket.contains_injection,
+            contains_dangerous=ticket.contains_dangerous,
+            contains_pii=ticket.contains_pii,
             domain=domain,
+            is_tiny=is_tiny,
         )
 
         # 5. Generate the user-facing response ------------------------------
         if status == "escalated":
             team = product_area if domain else "our"
-            response = escalation_response(team=team, reason=decision_reason)
+            response = escalation_response(
+                team=team, reason=decision_reason, risk=risk,
+                domain=domain, request_type=request_type,
+            )
+        elif request_type == "invalid" or is_tiny:
+            response = self._oos_or_tiny_response(domain, is_tiny)
         else:
             llm_text = generate_response(
-                issue=retrieval_query,  # focus reply on the strongest sub-question
+                issue=retrieval_query,
                 chunks=chunks,
                 provider=self.cfg.llm_provider,
                 anthropic_model=self.cfg.anthropic_model,
@@ -139,7 +156,8 @@ class SupportTriageAgent:
             response = llm_text or fallback_extractive_answer(retrieval_query, chunks)
 
         # 6. Compose justification (traceable to corpus) --------------------
-        sources = ", ".join(sorted({c.chunk.source_path for c in chunks[:3]})) or "no sources"
+        top_source = chunks[0].chunk.source_path if chunks else "no sources"
+        all_sources = ", ".join(sorted({c.chunk.source_path for c in chunks[:3]})) or "no sources"
         multi_q_note = ""
         if len(ticket.sub_questions) > 1:
             multi_q_note = (
@@ -153,7 +171,8 @@ class SupportTriageAgent:
             status=status,
             decision_reason=decision_reason,
             evidence_score=evidence_score,
-            sources=sources,
+            top_source=top_source,
+            all_sources=all_sources,
             multi_q_note=multi_q_note,
         )
 
@@ -166,40 +185,37 @@ class SupportTriageAgent:
         }
 
     # ─── helpers ────────────────────────────────────────────────────────
-    def _product_area_for(self, domain: str | None, text: str) -> str:
-        """Map domain + content cues into a richer product_area label.
+    def _product_area_from_chunks(
+        self, chunks: List[RetrievedChunk], domain: str | None,
+    ) -> str:
+        """Derive product_area from the top chunk's corpus subdirectory.
 
-        We keep this conservative — judges score `product_area` on whether
-        it points to the right support category. We bias toward general
-        labels and let evidence chunks shape it via simple heuristics.
+        The sample CSV uses subdirectory names (screen, community, privacy,
+        conversation_management, travel_support, general_support) — Item #15.
         """
-        base = _PRODUCT_AREA_BY_DOMAIN.get(domain, "General Support")
-        low = text.lower()
-        if domain == "hackerrank":
-            if any(k in low for k in ["assessment", "test", "interview", "candidate"]):
-                return "HackerRank: Assessments / Interviews"
-            if any(k in low for k in ["billing", "invoice", "subscription", "plan"]):
-                return "HackerRank: Billing"
-            if "codepair" in low:
-                return "HackerRank: CodePair"
-            return "HackerRank: General"
-        if domain == "claude":
-            if any(k in low for k in ["billing", "subscription", "plan", "refund", "invoice"]):
-                return "Claude: Billing & Plans"
-            if any(k in low for k in ["api", "rate limit", "token"]):
-                return "Claude: API"
-            if any(k in low for k in ["password", "login", "sign in", "account"]):
-                return "Claude: Account & Access"
-            return "Claude: General"
-        if domain == "visa":
-            if any(k in low for k in ["fraud", "stolen", "unauthorized", "scam"]):
-                return "Visa: Fraud & Disputes"
-            if any(k in low for k in ["chargeback", "dispute", "refund"]):
-                return "Visa: Disputes & Chargebacks"
-            if any(k in low for k in ["atm", "merchant", "transaction", "swipe", "tap"]):
-                return "Visa: Card Usage"
-            return "Visa: General"
-        return base
+        if not chunks:
+            return "general_support"
+        top_path = chunks[0].chunk.source_path  # e.g. "hackerrank/screen/..."
+        parts = top_path.replace("\\", "/").split("/")
+        if len(parts) >= 2:
+            return parts[1]  # the subdirectory under the domain
+        return "general_support"
+
+    def _oos_or_tiny_response(self, domain: str | None, is_tiny: bool) -> str:
+        """Reply for out-of-scope or tiny tickets."""
+        if is_tiny:
+            return (
+                "Thanks for reaching out. Your message is a bit brief for us to "
+                "identify the issue. Could you please share more details — "
+                "including which product (HackerRank, Claude, or Visa) you need "
+                "help with and a description of the problem?"
+            )
+        return (
+            "I appreciate you reaching out. This request falls outside the "
+            "scope of our support documentation. If you have a question about "
+            "HackerRank, Claude, or Visa products, please let us know and "
+            "we'll be happy to help."
+        )
 
     def _decide(
         self,
@@ -209,29 +225,35 @@ class SupportTriageAgent:
         evidence_score: float,
         contains_secret: bool,
         contains_injection: bool,
+        contains_dangerous: bool,
+        contains_pii: bool,
         domain: str | None,
+        is_tiny: bool = False,
     ) -> tuple[str, str]:
         """Returns (status, reason)."""
-        # Hard rules first (clearest wins for the scorer).
+        # Hard rules first.
+        if contains_dangerous:
+            return "escalated", "dangerous/malicious instruction detected (config.py:dangerous_patterns)"
         if contains_injection:
-            return "escalated", "prompt-injection / non-support content detected"
+            return "escalated", "prompt-injection detected (config.py:invalid_signals)"
         if contains_secret:
             return "escalated", "user pasted a secret (key/password) — needs human handling"
         if request_type == "invalid":
-            # Genuinely empty / nonsense / off-topic. We REPLY with a polite OOS
-            # message rather than escalate — we don't want to waste human time
-            # on spam. The spec explicitly contemplates this distinction.
+            # Harmless OOS → reply with polite message, don't waste human time.
+            # Sensitive OOS is caught by risk/injection checks above.
             return "replied", "out-of-scope / invalid; replied with polite OOS message"
         if risk.level == "high":
-            return "escalated", risk.reason
+            return "escalated", f"high-risk keyword '{risk.triggered_terms[0]}' matched (config.py:high_risk_keywords)"
+        if contains_pii:
+            return "escalated", "PII detected in ticket (card number / CVV) — human handling required"
         if requires_account_action(ticket_text):
             return "escalated", "requires account-specific action by a human agent"
+        if is_tiny and domain is None:
+            return "replied", "too few content tokens and no domain — asked user for details"
         if domain is None and evidence_score < self.cfg.min_evidence_similarity:
             return "escalated", "no domain identified and no relevant docs"
         if evidence_score < self.cfg.min_evidence_similarity:
             return "escalated", f"no sufficiently relevant docs (score={evidence_score:.2f})"
-        # Medium-risk + weak-but-not-empty evidence: be conservative and escalate.
-        # This addresses "assess urgency AND risk" by letting both signals matter.
         if risk.level == "medium" and evidence_score < self.cfg.medium_risk_evidence_floor:
             return (
                 "escalated",
@@ -247,12 +269,22 @@ class SupportTriageAgent:
         status: str,
         decision_reason: str,
         evidence_score: float,
-        sources: str,
+        top_source: str,
+        all_sources: str,
         multi_q_note: str = "",
     ) -> str:
+        """Traceable justification naming the source file and rule (Items #12-13)."""
+        if status == "escalated":
+            return (
+                f"Domain={domain or 'unknown'}; request_type={request_type}; "
+                f"risk={risk.level}. Top source: {top_source} "
+                f"(score={evidence_score:.2f}). "
+                f"Escalated because: {decision_reason}.{multi_q_note}"
+            )
         return (
             f"Domain={domain or 'unknown'}; request_type={request_type}; "
-            f"risk={risk.level} ({risk.reason}). "
-            f"Evidence score={evidence_score:.2f}; sources=[{sources}]. "
+            f"risk={risk.level}. Reply drawn from {top_source} "
+            f"(top score={evidence_score:.2f}). "
+            f"All sources: [{all_sources}]. "
             f"Decision={status}: {decision_reason}.{multi_q_note}"
         )
