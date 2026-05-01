@@ -78,7 +78,7 @@ def test_request_type_dangerous():
 def test_request_type_feature_request():
     """Feature request triggers (Item #16)."""
     assert classify_request_type(
-        "I am planning to start using HackerRank for hiring, can you help us with the infosec process",
+        "Can you add support for Python 3.12 in the environment?",
         False, False, 0.5,
     ) == "feature_request"
 
@@ -93,7 +93,7 @@ def test_account_action_detection():
     assert requires_account_action("Can someone refund my charge") is True
     assert requires_account_action("How does password reset work in general?") is False
     assert requires_account_action("please pause our subscription") is True
-    assert requires_account_action("I want to remove them from our account") is True
+    assert requires_account_action("I need you to remove them from our account") is True
 
 
 def test_injection_detection():

@@ -160,10 +160,23 @@ _ACTION_VERBS = re.compile(
     re.IGNORECASE,
 )
 _PERSONAL_REF = re.compile(r"\b(my|our|me|mine)\b", re.IGNORECASE)
+_IMPERATIVE_REF = re.compile(
+    r"\b(please|can you|could you|i need you to|help me|can someone)\b",
+    re.IGNORECASE,
+)
 
 
 def requires_account_action(text: str) -> bool:
     """True if the user is asking the agent to act on their specific account."""
     if not text:
         return False
-    return bool(_ACTION_VERBS.search(text) and _PERSONAL_REF.search(text))
+    # To reduce over-escalation, we require:
+    # 1. An action verb (delete, refund, etc.)
+    # 2. A personal reference (my account, me, etc.)
+    # 3. Imperative/Direct phrasing (please, can you, etc.)
+    # This distinguishes "how do I reset my password" from "please reset my password".
+    return bool(
+        _ACTION_VERBS.search(text) and 
+        _PERSONAL_REF.search(text) and 
+        _IMPERATIVE_REF.search(text)
+    )

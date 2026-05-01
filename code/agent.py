@@ -198,7 +198,7 @@ class SupportTriageAgent:
         # If the path is e.g. "hackerrank/screen/faq.md" or "claude/privacy-and-legal/xyz.md"
         # The first part is the domain. The second part is the product area.
         if len(parts) >= 2:
-            pa = parts[1].lower().replace("-", "_")
+            pa = parts[1].lower().replace("-", "_").replace(".md", "")
             
             # Special deeply nested paths that define their own product area
             if "travel-support" in path:
@@ -208,6 +208,7 @@ class SupportTriageAgent:
                 
             # Map specific directories to their expected CSV labels or fallbacks
             mapping = {
+                "screen": "screen",
                 "hackerrank_community": "community",
                 "privacy_and_legal": "privacy",
                 "uncategorized": "general_support",
