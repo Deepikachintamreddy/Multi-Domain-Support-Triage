@@ -70,6 +70,10 @@ def _read_text_file(path: Path) -> Optional[str]:
         # Strip YAML frontmatter — it pollutes BM25 scoring AND leaks into
         # user-facing responses via the extractive fallback.  Item #1.
         text = _FRONTMATTER_RE.sub("", text, count=1)
+        # Strip HTML tags and entities to avoid leaking them into responses (Issue #2)
+        text = re.sub(r'<[^>]+>', ' ', text)
+        text = re.sub(r'&lt;|&gt;|&amp;|&quot;', '', text)
+        text = re.sub(r'\s+', ' ', text)
         return text
     except Exception as e:
         log.warning("Could not read %s: %s", path, e)

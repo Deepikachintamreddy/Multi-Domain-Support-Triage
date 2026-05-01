@@ -166,15 +166,21 @@ _IMPERATIVE_REF = re.compile(
 )
 
 
+_QUESTION_WORDS = re.compile(r"\b(how|where|why|what)\b", re.IGNORECASE)
+
 def requires_account_action(text: str) -> bool:
     """True if the user is asking the agent to act on their specific account."""
     if not text:
         return False
+    
+    # Never escalate if the ticket contains a how-to question word (Issue #1)
+    if _QUESTION_WORDS.search(text):
+        return False
+        
     # To reduce over-escalation, we require:
     # 1. An action verb (delete, refund, etc.)
     # 2. A personal reference (my account, me, etc.)
     # 3. Imperative/Direct phrasing (please, can you, etc.)
-    # This distinguishes "how do I reset my password" from "please reset my password".
     return bool(
         _ACTION_VERBS.search(text) and 
         _PERSONAL_REF.search(text) and 

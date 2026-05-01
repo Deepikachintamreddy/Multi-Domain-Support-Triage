@@ -38,7 +38,7 @@ log = logging.getLogger("agent")
 
 
 # Minimum content tokens to treat a ticket as meaningful
-_MIN_CONTENT_TOKENS = 5
+_MIN_CONTENT_TOKENS = 6
 
 
 class SupportTriageAgent:
@@ -230,9 +230,17 @@ class SupportTriageAgent:
                 "support": "general_support",
                 "claude": "general_support",
                 "hackerrank": "general_support",
-                "visa": "general_support"
+                "visa": "general_support",
+                "interviews": "general_support",
+                "integrations": "general_support",
+                "settings": "general_support",
+                "claude_code": "general_support",
+                "claude_for_education": "general_support",
+                "claude_for_nonprofits": "general_support",
+                "safeguards": "general_support",
+                "team_and_enterprise_plans": "general_support",
             }
-            return mapping.get(pa, pa)
+            return mapping.get(pa, "general_support")
             
         return "general_support"
 
