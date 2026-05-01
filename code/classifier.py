@@ -71,8 +71,7 @@ _BUG_HINTS = re.compile(
 )
 _FEATURE_HINTS = re.compile(
     r"\b(can you add|please add|i wish|would be nice|feature request|"
-    r"support for|add support|wanted to setup|want to set up|"
-    r"planning to start using|can you help us with)\b",
+    r"support for|add support)\b",
     re.IGNORECASE,
 )
 _HOWTO_HINTS = re.compile(
@@ -102,8 +101,9 @@ def classify_request_type(
         return "feature_request"
     if _HOWTO_HINTS.search(text):
         return "product_issue"
-    # Fallback when we found relevant docs → product_issue; else invalid.
-    return "product_issue" if evidence_score >= 0.20 else "invalid"
+    # Don't dump to invalid just because retrieval was weak — let the decision
+    # gate handle escalation via risk and evidence checks. Default to product_issue.
+    return "product_issue"
 
 
 # ── Risk classification ─────────────────────────────────────────────────

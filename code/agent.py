@@ -188,37 +188,38 @@ class SupportTriageAgent:
     def _product_area_from_chunks(
         self, chunks: List[RetrievedChunk], domain: str | None,
     ) -> str:
-        """Derive product_area from the top chunk's corpus subdirectory.
-
-        The sample CSV and instructions use specific labels: screen, community, 
-        interviews, privacy, conversation_management, travel_support, settings.
-        """
+        """Derive product_area from the top chunk's corpus subdirectory."""
         if not chunks:
             return "general_support"
         
-        path = chunks[0].chunk.source_path.lower().replace("\\", "/")
+        path = chunks[0].chunk.source_path.replace("\\", "/")
+        parts = path.split("/")
         
-        # Substring mapping to guarantee exact overlap with official vocabulary
-        mapping = {
-            "screen": "screen",
-            "interviews": "interviews",
-            "settings": "settings",
-            "hackerrank_community": "community",
-            "community": "community",
-            "privacy": "privacy",
-            "conversation": "conversation_management",
-            "travel": "travel_support",
-        }
-        
-        for key, val in mapping.items():
-            if f"/{key}" in path or path.startswith(f"{key}/") or key in path.split("/"):
-                return val
+        # If the path is e.g. "hackerrank/screen/faq.md" or "claude/privacy-and-legal/xyz.md"
+        # The first part is the domain. The second part is the product area.
+        if len(parts) >= 2:
+            pa = parts[1].lower().replace("-", "_")
+            
+            # Special deeply nested paths that define their own product area
+            if "travel-support" in path:
+                return "travel_support"
+            if "conversation-management" in path:
+                return "conversation_management"
                 
-        # Additional safe fallbacks
-        if "integrations" in path:
-            return "integrations"
-        if "billing" in path or "plans" in path:
-            return "billing"
+            # Map specific directories to their expected CSV labels or fallbacks
+            mapping = {
+                "hackerrank_community": "community",
+                "privacy_and_legal": "privacy",
+                "uncategorized": "general_support",
+                "general_help": "general_support",
+                "consumer": "general_support",
+                "merchant": "general_support",
+                "support": "general_support",
+                "claude": "general_support",
+                "hackerrank": "general_support",
+                "visa": "general_support"
+            }
+            return mapping.get(pa, pa)
             
         return "general_support"
 
@@ -252,25 +253,29 @@ class SupportTriageAgent:
         is_tiny: bool = False,
     ) -> tuple[str, str]:
         """Returns (status, reason)."""
-        # Hard rules first.
-        if contains_dangerous:
-            return "escalated", "dangerous/malicious instruction detected (config.py:dangerous_patterns)"
-        if contains_injection:
-            return "escalated", "prompt-injection detected (config.py:invalid_signals)"
-        if contains_secret:
-            return "escalated", "user pasted a secret (key/password) — needs human handling"
-        if request_type == "invalid":
-            # Harmless OOS → reply with polite message, don't waste human time.
-            # Sensitive OOS is caught by risk/injection checks above.
-            return "replied", "out-of-scope / invalid; replied with polite OOS message"
+        # 1. High-risk must NEVER be short-circuited
         if risk.level == "high":
             return "escalated", f"high-risk keyword '{risk.triggered_terms[0]}' matched (config.py:high_risk_keywords)"
         if contains_pii:
             return "escalated", "PII detected in ticket (card number / CVV) — human handling required"
+        if contains_secret:
+            return "escalated", "user pasted a secret (key/password) — needs human handling"
         if requires_account_action(ticket_text):
             return "escalated", "requires account-specific action by a human agent"
+            
+        # 2. Dangerous/Injection -> invalid + escalate
+        if contains_dangerous:
+            return "escalated", "dangerous/malicious instruction detected (config.py:dangerous_patterns)"
+        if contains_injection:
+            return "escalated", "prompt-injection detected (config.py:invalid_signals)"
+            
+        # 3. Invalid (genuine spam/empty/OOS) -> reply with OOS
+        if request_type == "invalid":
+            return "replied", "out-of-scope / invalid; replied with polite OOS message"
         if is_tiny and domain is None:
             return "replied", "too few content tokens and no domain — asked user for details"
+            
+        # 4. Weak evidence -> escalate
         if domain is None and evidence_score < self.cfg.min_evidence_similarity:
             return "escalated", "no domain identified and no relevant docs"
         if evidence_score < self.cfg.min_evidence_similarity:
@@ -280,6 +285,8 @@ class SupportTriageAgent:
                 "escalated",
                 f"medium-risk topic ({risk.reason}) with low-confidence evidence ({evidence_score:.2f})",
             )
+            
+        # 5. Else -> reply
         return "replied", f"answerable from corpus (score={evidence_score:.2f}, risk={risk.level})"
 
     def _build_justification(

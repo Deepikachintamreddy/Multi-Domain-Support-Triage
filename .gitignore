@@ -53,3 +53,4 @@ htmlcov/
 *.log
 *.zip
 output.csv
+log.txt
